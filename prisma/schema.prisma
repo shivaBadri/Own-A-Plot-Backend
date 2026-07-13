@@ -1,0 +1,257 @@
+// Own A Plot — production schema.
+//
+// This file EXTENDS the original schema. No existing model, field, or enum was
+// removed or renamed; every new column is optional or has a default, so the
+// migration is non-destructive on an existing database.
+//
+// The extension exists because the approved frontend renders a much richer
+// content model than the original `Project` carried (tagline, region, acreage,
+// story, advantages, landscape rows, nearby distances, brochure, gallery).
+// Without these columns the public pages could not be database-driven.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth ----------
+
+model Admin {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------- Projects (a.k.a. "Ventures" on the public site) & Plots ----------
+
+enum ProjectStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+}
+
+/// Editorial accent colour, drawn from the approved palette.
+enum Accent {
+  OLIVE
+  EARTH
+  BARK
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  slug        String        @unique
+  description String
+  location    String
+  status      ProjectStatus @default(UPCOMING)
+  coverImage  String?
+  amenities   String[]      @default([])
+  isPublished Boolean       @default(false)
+
+  seoTitle       String?
+  seoDescription String?
+
+  // ---- Editorial fields required by the approved frontend ----
+
+  /// One-line editorial line shown under the venture name.
+  tagline String?
+  /// e.g. "South of the city, 45 minutes from the airport"
+  region  String?
+  /// Total extent, in acres.
+  totalAcres Float?
+
+  /// Full-bleed hero. Falls back to coverImage when null.
+  heroImage String?
+  /// Optional hero video (mp4/webm). Rendered over heroImage when present.
+  heroVideo String?
+
+  accent Accent @default(OLIVE)
+
+  /// Ordered image URLs for the editorial gallery.
+  gallery String[] @default([])
+
+  // Story block
+  storyEyebrow String?
+  storyTitle   String?
+  /// One entry per paragraph.
+  storyBody    String[] @default([])
+
+  /// Array<{ title, body, image }> — the hover-swap "Location Advantages" block.
+  advantages Json?
+  /// Array<{ label, value }> — "The Layout, in Numbers".
+  details    Json?
+  /// Array<{ title, body, image }> — full-width editorial rows.
+  landscape  Json?
+  /// Array<{ name, distance }> — "Reachable From".
+  nearby     Json?
+
+  // Location
+  address   String?
+  latitude  Float?
+  longitude Float?
+  mapEmbed  String?
+
+  // Brochure (PDF, served from Cloudinary)
+  brochureUrl      String?
+  brochureFileName String?
+  brochureFileSize String?
+
+  /// Surfaces the venture in the homepage "Featured Ventures" grid.
+  featured  Boolean @default(false)
+  /// Lower numbers sort first across public listings.
+  sortOrder Int     @default(0)
+
+  plots     Plot[]
+  media     Media[]
+  enquiries Enquiry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([status])
+  @@index([isPublished, sortOrder])
+  @@index([featured])
+}
+
+enum PlotStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+}
+
+model Plot {
+  id          String     @id @default(cuid())
+  plotNumber  String
+  sizeSqft    Float
+  price       Float
+  status      PlotStatus @default(AVAILABLE)
+  facing      String?
+  description String?
+
+  /// Optional: hide price and show "On enquiry" instead.
+  priceOnRequest Boolean @default(false)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  media     Media[]
+  enquiries Enquiry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, plotNumber])
+  @@index([status])
+  @@index([projectId, status])
+}
+
+// ---------- Enquiries ----------
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
+
+model Enquiry {
+  id      String        @id @default(cuid())
+  name    String
+  email   String
+  phone   String
+  message String?
+  status  EnquiryStatus @default(NEW)
+
+  /// Free-text "Interest" line from the approved enquiry form.
+  interest String?
+  /// Which page the enquiry came from — useful for attribution.
+  source   String?
+  /// Internal notes, admin-only.
+  notes    String?
+
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId String?
+
+  plot   Plot?   @relation(fields: [plotId], references: [id], onDelete: SetNull)
+  plotId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------- CMS ----------
+
+model CmsSection {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  content   Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------- Media Library ----------
+
+enum MediaKind {
+  IMAGE
+  RAW
+}
+
+model Media {
+  id       String @id @default(cuid())
+  url      String
+  publicId String
+  alt      String?
+  width    Int?
+  height   Int?
+
+  /// IMAGE for photos, RAW for brochures/PDFs. Needed to pick the right
+  /// Cloudinary resource_type when deleting.
+  kind     MediaKind @default(IMAGE)
+  /// Original filename, shown in the media library.
+  fileName String?
+  /// Size in bytes.
+  bytes    Int?
+  format   String?
+
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId String?
+
+  plot   Plot?   @relation(fields: [plotId], references: [id], onDelete: SetNull)
+  plotId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([projectId])
+}
+
+// ---------- Settings ----------
+
+model SiteSettings {
+  id           String  @id @default("singleton")
+  siteName     String  @default("Own A Plot")
+  contactEmail String?
+  contactPhone String?
+  address      String?
+  socialLinks  Json?
+
+  /// e.g. "Mon – Sat, 10am – 7pm"
+  officeHours   String?
+  /// Short paragraph used in the footer.
+  footerTagline String?
+
+  defaultSeoTitle       String?
+  defaultSeoDescription String?
+
+  updatedAt DateTime @updatedAt
+}
